@@ -6,7 +6,7 @@ Incremental implementation following priority order: Data Models → Voice Pipel
 
 ## Tasks
 
-- [ ] 1. Set up backend project structure and shared data models
+- [x] 1. Set up backend project structure and shared data models
   - Create `backend/` directory layout: `app/`, `services/`, `models/`, `tests/`, `templates/`
   - Define all dataclasses in `backend/app/models.py`: `Case`, `Worker`, `ConversationSession`, `GroupComplaint`, `WageData`, `JurisdictionResult`, `LabourOffice`, `TranscriptResult`, `RAGResult`, `LawDocument`, `LawChunk`, `ComplaintDocument`, `EscalationTask`, `EscalationEvent`
   - Define enums: `CaseStatus`, `EscalationStatus`, `ConversationState`
@@ -15,7 +15,7 @@ Incremental implementation following priority order: Data Models → Voice Pipel
   - Create `backend/app/firebase_init.py` to initialise Firebase Admin SDK from environment credentials
   - _Requirements: 1.7, 2.2, 4.7, 6.3, 7.1, 8.1, 11.2_
 
-- [ ] 2. Implement Voice Pipeline (STT + TTS)
+- [x] 2. Implement Voice Pipeline (STT + TTS)
   - [ ] 2.1 Implement `VoicePipeline` class in `backend/services/voice_pipeline.py`
     - OGG/Opus → WAV conversion using pydub/ffmpeg before sending to Gemini STT
     - Gemini STT transcription returning `TranscriptResult` with non-empty `text`, BCP-47 `detected_language`, and `confidence` in [0.0, 1.0]
