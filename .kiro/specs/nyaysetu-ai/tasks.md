@@ -2,7 +2,7 @@
 
 ## Overview
 
-Incremental implementation following priority order: Data Models → Voice Pipeline → RAG Pipeline → Jurisdiction Engine → WhatsApp Handler + Conversation State Machine → OCR → Complaint PDF → Case Tracking → Entitlement Discovery → NGO Dashboard → Security/Performance → Integration. Each task builds on the previous, ending with full wiring. All backend code is Python/Flask; frontend is React 18 + Tailwind CSS.
+Incremental implementation following priority order: Data Models → Voice Pipeline → RAG Pipeline → WhatsApp Webhook Handler → Jurisdiction Engine → OCR → Complaint PDF → Conversation State Machine → Case Tracking → Entitlement Discovery → NGO Dashboard → Security/Performance → Integration. Each task builds on the previous, ending with full wiring. All backend code is Python/Flask; frontend is React 18 + Tailwind CSS.
 
 ## Tasks
 
@@ -67,16 +67,15 @@ Incremental implementation following priority order: Data Models → Voice Pipel
 - [ ] 4. Checkpoint — Ensure Voice Pipeline and RAG Pipeline tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Implement Jurisdiction Engine
-  - [ ] 5.1 Implement `JurisdictionEngine` in `backend/services/jurisdiction_engine.py`
-    - Load Labour Commissioner office directory from Firestore at startup; schedule daily refresh
-    - `determine(origin_state, dest_state, employer_state)` — pure deterministic function, no external API calls
-    - ISMWA §13 rule: `primary_office` = dest_state office
-    - Include origin_state office in `alternate_offices` when it differs from dest_state
-    - Include employer_state office in `alternate_offices` when it differs from both origin and dest states
-    - Validate ISO 3166-2:IN state codes for `origin_state` and `dest_state`; raise `ValidationError` on invalid input
-    - Return fallback `JurisdictionResult` with Ministry of Labour helpline when `lookup_labour_office()` returns None; flag case for admin review
-    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 13.6_
+- [ ] 5. Implement WhatsApp Webhook Handler
+  - [ ] 5.1 Implement `WhatsAppClient` in `backend/services/whatsapp_client.py`
+    - `send_text(to, body)`, `send_document(to, doc_url, caption)`, `send_interactive_buttons(to, body, buttons)`, `download_media(media_id)` methods
+    - Exponential backoff retry (1s, 2s, 4s, max 3 retries) on Meta API 4xx/5xx errors
+    - Mark case `delivery_failed=True` and update Firestore when all retries exhausted
+    - _Requirements: 1.8, 13.4, 13.5_
+
+  - [ ] 5.2 Implement `/webhook/whatsapp` POST route in `backend/app/routes/webhook.py`
+    - Validate `x-hub-signature-256` header using HMAC-SHA256; reject with HTTP 403 if invalid or absent
     - Parse message type: audio → VoicePipeline, text/interactive → RAGPipeline, image → OCRService
     - Get-or-create `ConversationSession` in Firestore per phone number
     - Return HTTP 200 within 5 seconds; dispatch processing asynchronously (background thread)
@@ -100,13 +99,13 @@ Incremental implementation following priority order: Data Models → Voice Pipel
 
 - [ ] 6. Implement Jurisdiction Engine
   - [ ] 6.1 Implement `JurisdictionEngine` in `backend/services/jurisdiction_engine.py`
-    - Load Labour Commissioner office directory from Firestore at startup; refresh daily
+    - Load Labour Commissioner office directory from Firestore at startup; schedule daily refresh
     - `determine(origin_state, dest_state, employer_state)` — pure deterministic function, no external API calls
     - ISMWA §13 rule: `primary_office` = dest_state office
-    - Include origin_state office in `alternate_offices` when different from dest_state
-    - Include employer_state office in `alternate_offices` when it differs from both
-    - Validate ISO 3166-2:IN state codes; raise `ValidationError` on invalid input
-    - Fallback result with Ministry of Labour helpline when `lookup_labour_office()` returns None
+    - Include origin_state office in `alternate_offices` when it differs from dest_state
+    - Include employer_state office in `alternate_offices` when it differs from both origin and dest states
+    - Validate ISO 3166-2:IN state codes for `origin_state` and `dest_state`; raise `ValidationError` on invalid input
+    - Return fallback `JurisdictionResult` with Ministry of Labour helpline when `lookup_labour_office()` returns None; flag case for admin review
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 13.6_
 
   - [ ]* 6.2 Write property test for jurisdiction determinism
