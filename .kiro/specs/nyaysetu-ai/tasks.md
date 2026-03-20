@@ -2,7 +2,7 @@
 
 ## Overview
 
-Incremental implementation following priority order: Voice Pipeline → RAG Pipeline → WhatsApp Handler → Jurisdiction Engine → OCR → Complaint PDF → Case Tracking → Entitlement Discovery → NGO Dashboard → Security/Performance. Each task builds on the previous, ending with full integration. All backend code is Python/Flask; frontend is React 18 + Tailwind CSS.
+Incremental implementation following priority order: Data Models → Voice Pipeline → RAG Pipeline → Jurisdiction Engine → WhatsApp Handler + Conversation State Machine → OCR → Complaint PDF → Case Tracking → Entitlement Discovery → NGO Dashboard → Security/Performance → Integration. Each task builds on the previous, ending with full wiring. All backend code is Python/Flask; frontend is React 18 + Tailwind CSS.
 
 ## Tasks
 
@@ -10,73 +10,73 @@ Incremental implementation following priority order: Voice Pipeline → RAG Pipe
   - Create `backend/` directory layout: `app/`, `services/`, `models/`, `tests/`, `templates/`
   - Define all dataclasses in `backend/app/models.py`: `Case`, `Worker`, `ConversationSession`, `GroupComplaint`, `WageData`, `JurisdictionResult`, `LabourOffice`, `TranscriptResult`, `RAGResult`, `LawDocument`, `LawChunk`, `ComplaintDocument`, `EscalationTask`, `EscalationEvent`
   - Define enums: `CaseStatus`, `EscalationStatus`, `ConversationState`
-  - Create `backend/requirements.txt` with all dependencies
-  - Create `backend/app/__init__.py` Flask app factory with config loading from environment variables
-  - _Requirements: 1.7, 2.2, 4.7, 6.3, 7.1, 8.1_
+  - Create `backend/requirements.txt` with all dependencies: Flask, google-generativeai, chromadb, firebase-admin, WeasyPrint, Jinja2, APScheduler, hypothesis, pytest, pydub, requests
+  - Create `backend/app/__init__.py` Flask app factory with config loading from environment variables (no secrets in source code)
+  - Create `backend/app/firebase_init.py` to initialise Firebase Admin SDK from environment credentials
+  - _Requirements: 1.7, 2.2, 4.7, 6.3, 7.1, 8.1, 11.2_
 
 - [ ] 2. Implement Voice Pipeline (STT + TTS)
   - [ ] 2.1 Implement `VoicePipeline` class in `backend/services/voice_pipeline.py`
-    - OGG/Opus → WAV conversion using pydub/ffmpeg
-    - Gemini STT transcription with `lang_hint` fallback when `confidence < 0.6`
-    - Language detection and BCP-47 code normalisation
-    - TTS synthesis returning MP3 bytes in worker's session language
+    - OGG/Opus → WAV conversion using pydub/ffmpeg before sending to Gemini STT
+    - Gemini STT transcription returning `TranscriptResult` with non-empty `text`, BCP-47 `detected_language`, and `confidence` in [0.0, 1.0]
+    - Language detection: persist to session when `confidence >= 0.6`; re-attempt with `lang_hint` when `confidence < 0.6`
+    - TTS synthesis returning valid MP3 bytes in worker's session language
     - Exponential backoff retry (1s, 2s, 4s, max 3 retries) on Gemini 5xx errors
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 13.1_
 
-  - [ ]* 2.2 Write property test for VoicePipeline transcription confidence range
-    - **Property 9: Session Language Persists Once Detected** — for any session where `detected_language` was set with `confidence >= 0.6`, the session language must not change
+  - [ ]* 2.2 Write property test for session language persistence
+    - **Property 9: Session Language Persists Once Detected** — for any session where `detected_language` was set with `confidence >= 0.6`, the session language must not change for the remainder of that session
     - **Validates: Requirements 2.4**
 
   - [ ]* 2.3 Write unit tests for VoicePipeline
-    - Test OGG→WAV conversion path
-    - Test `lang_hint` fallback when confidence < 0.6
-    - Test unsupported language triggers interactive button message
-    - Test 5-minute timeout defaults to Hindi
+    - Test OGG→WAV conversion produces valid WAV bytes
+    - Test `lang_hint` fallback triggered when confidence < 0.6
+    - Test unsupported language triggers interactive button message listing 10 supported languages
+    - Test 5-minute inactivity defaults session language to Hindi (hi)
     - _Requirements: 2.5, 2.7, 2.8_
 
 - [ ] 3. Implement RAG Pipeline (ChromaDB + Gemini)
   - [ ] 3.1 Implement `LawDocument` ingestion and chunking in `backend/services/rag_pipeline.py`
     - Parse law documents into chunks with metadata: `doc_id`, `title`, `content`, `state`, `act_name`, `section_number`, `effective_date`
-    - Embed chunks using Gemini `text-embedding-004`
-    - Store in ChromaDB with metadata
-    - Implement `pretty_print(doc)` that preserves section structure
+    - Embed chunks using Gemini `text-embedding-004` and store in ChromaDB with metadata
+    - Implement `pretty_print(doc)` that formats a `LawDocument` back to human-readable string preserving section structure
     - _Requirements: 3.1, 14.1, 14.2, 14.3_
 
   - [ ] 3.2 Implement `RAGPipeline.query()` with grounded Gemini generation
-    - Embed query using Gemini `text-embedding-004`
-    - Cosine similarity search, default `top_k=5`, range [1, 20]
-    - Build system prompt: `[LEGAL CONTEXT]\n{chunks}\n[END CONTEXT]`
+    - Embed query using Gemini `text-embedding-004`; enforce max 2000 character input
+    - Cosine similarity search, default `top_k=5`, valid range [1, 20]; return all available docs without error when store has fewer than `top_k`
+    - Build system prompt: `[LEGAL CONTEXT]\n{chunks}\n[END CONTEXT]`; instruct Gemini to cite section numbers and answer only from context
     - Gemini generation at temperature = 0.1
-    - Extract and validate citations against source chunks
-    - Handle case where vector store has fewer docs than `top_k`
-    - _Requirements: 3.2, 3.3, 3.4, 3.6, 3.7_
+    - Extract citations and validate each references a `doc_id` present in `source_chunks`
+    - _Requirements: 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
 
   - [ ]* 3.3 Write property test for RAG citation grounding
-    - **Property 4: RAG Citations Are Grounded in Retrieved Chunks** — for any query, every citation in `RAGResult.citations` must reference a `doc_id` present in `RAGResult.source_chunks`
+    - **Property 4: RAG Citations Are Grounded in Retrieved Chunks** — for any user query, every citation string in `RAGResult.citations` must reference a `doc_id` present in `RAGResult.source_chunks`
     - **Validates: Requirements 3.5**
 
   - [ ]* 3.4 Write property test for law document round-trip
-    - **Property 5: Law Document Ingestion Round-Trip** — parse → pretty-print → parse must produce an equivalent `LawDocument`
+    - **Property 5: Law Document Ingestion Round-Trip** — for any valid `LawDocument`, parse → pretty-print → parse must produce an object equivalent to the original
     - **Validates: Requirements 14.4**
 
   - [ ]* 3.5 Write unit tests for RAGPipeline
     - Test query with fewer docs than `top_k` returns all available without error
-    - Test query max 2000 characters enforced
-    - Test round-trip: ingest ISMWA section → query phrase from it → assert it appears in top-k
+    - Test query exceeding 2000 characters is rejected with a validation error
+    - Test round-trip: ingest an ISMWA section → query a phrase from it → assert it appears in top-k results
     - _Requirements: 3.6, 3.7, 3.8_
 
 - [ ] 4. Checkpoint — Ensure Voice Pipeline and RAG Pipeline tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Implement WhatsApp Webhook Handler and Client
-  - [ ] 5.1 Implement `WhatsAppClient` in `backend/services/whatsapp_client.py`
-    - `send_text()`, `send_document()`, `send_interactive_buttons()`, `download_media()`
-    - Exponential backoff retry on 4xx/5xx Meta API responses (max 3 retries)
-    - Mark case `delivery_failed=True` if all retries exhausted
-    - _Requirements: 1.8, 13.4, 13.5_
-
-  - [ ] 5.2 Implement `/webhook/whatsapp` Flask route in `backend/app/routes/webhook.py`
-    - HMAC-SHA256 signature validation; reject with HTTP 403 on failure
+- [ ] 5. Implement Jurisdiction Engine
+  - [ ] 5.1 Implement `JurisdictionEngine` in `backend/services/jurisdiction_engine.py`
+    - Load Labour Commissioner office directory from Firestore at startup; schedule daily refresh
+    - `determine(origin_state, dest_state, employer_state)` — pure deterministic function, no external API calls
+    - ISMWA §13 rule: `primary_office` = dest_state office
+    - Include origin_state office in `alternate_offices` when it differs from dest_state
+    - Include employer_state office in `alternate_offices` when it differs from both origin and dest states
+    - Validate ISO 3166-2:IN state codes for `origin_state` and `dest_state`; raise `ValidationError` on invalid input
+    - Return fallback `JurisdictionResult` with Ministry of Labour helpline when `lookup_labour_office()` returns None; flag case for admin review
+    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 13.6_
     - Parse message type: audio → VoicePipeline, text/interactive → RAGPipeline, image → OCRService
     - Get-or-create `ConversationSession` in Firestore per phone number
     - Return HTTP 200 within 5 seconds; dispatch processing asynchronously (background thread)
